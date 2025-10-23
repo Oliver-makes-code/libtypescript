@@ -1,0 +1,10 @@
+[package]
+name = "typescript"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+deno_ast = { version = "0.50.3", features = ["transpiling", "typescript"] }
