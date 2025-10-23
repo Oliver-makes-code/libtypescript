@@ -1,3 +1,0 @@
-import { z } from "test.d.ts";
-let x = z;
-//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbImZpbGU6Ly90ZXN0LnRzLyJdLCJzb3VyY2VzQ29udGVudCI6WyJpbXBvcnQge3RoaW5nLCB6fSBmcm9tIFwidGVzdC5kLnRzXCI7XG5sZXQgeDogdGhpbmcgPSB6O1xuIl0sIm5hbWVzIjpbXSwibWFwcGluZ3MiOiJBQUFBLFNBQWUsQ0FBQyxRQUFPLFlBQVk7QUFDbkMsSUFBSSxJQUFXIn0=
