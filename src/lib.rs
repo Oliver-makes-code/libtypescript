@@ -14,48 +14,41 @@ use deno_ast::{
 macro c_enum {
     (
         $ty:ident : $base_ty:ty {
-            $($rest:tt),* $(,)?
+            $($rest:tt $(= $value:expr)?),* $(,)?
         }
     ) => {
         type $ty = $base_ty;
-        c_enum!(@impl $base_ty, 0, $($rest),*);
+        c_enum!(@impl $base_ty, 0, $($rest $(= $value)?),*);
     },
 
     (
         $ty:ident {
-            $($rest:tt),* $(,)?
+            $($rest:tt $(= $value:expr)?),* $(,)?
         }
     ) => {
         type $ty = i32;
-        c_enum!(@impl i32, 0, $($rest),*);
+        c_enum!(@impl i32, 0, $($rest $(= $value)?),*);
     },
 
     (@impl $base_ty:ty, $_idx:expr,) => {},
 
-    (@impl $base_ty:ty, $_idx:expr,
-        $name:ident = $val:literal, $($rest:tt),*
-    ) => {
-        const $name: $base_ty = $val;
-        c_enum!(@impl $base_ty, ($val + 1), $($rest),*);
+    (@impl $base_ty:ty, $_idx:expr, $name:ident = $value:expr, $($rest:tt)*) => {
+        pub const $name: $base_ty = $value as $base_ty;
+        c_enum!(@impl $base_ty, (($value as $base_ty) + 1), $($rest)*);
     },
 
-    (@impl $base_ty:ty, $idx:expr,
-        $name:ident, $($rest:tt),*
-    ) => {
-        const $name: $base_ty = $idx;
-        c_enum!(@impl $base_ty, ($idx + 1), $($rest),*);
+    (@impl $base_ty:ty, $_idx:expr, $name:ident = $value:expr) => {
+        pub const $name: $base_ty = $value as $base_ty;
+        c_enum!(@impl $base_ty, (($value as $base_ty) + 1),);
     },
 
-    (@impl $base_ty:ty, $_idx:expr,
-        $name:ident = $val:literal
-    ) => {
-        const $name: $base_ty = $val;
+    (@impl $base_ty:ty, $idx:expr, $name:ident, $($rest:tt)*) => {
+        pub const $name: $base_ty = $idx as $base_ty;
+        c_enum!(@impl $base_ty, ($idx + 1), $($rest)*);
     },
 
-    (@impl $base_ty:ty, $idx:expr,
-        $name:ident
-    ) => {
-        const $name: $base_ty = $idx;
+    (@impl $base_ty:ty, $idx:expr, $name:ident) => {
+        pub const $name: $base_ty = $idx as $base_ty;
     },
 }
 
@@ -116,9 +109,19 @@ unsafe fn disown_str_to_cstr(s: &str, len: &mut usize) -> *const c_char {
 }
 
 c_enum!(CompileStatus: u8 {
-    OK,
-    INVALID_POINTER,
-    TYPESCRIPT_COMPILE_ERROR
+    STATUS_OK,
+    STATUS_INVALID_POINTER,
+    STATUS_COMPILE_ERROR
+});
+
+c_enum!(Options: u8 {
+    OPTION_CAPTURE_TOKENS              = 1 << 0,
+    OPTION_TSX                         = 1 << 1,
+    OPTION_DECORATORS                  = 1 << 2,
+    OPTION_DTS                         = 1 << 3,
+    OPTION_NO_EARLY_ERRORS             = 1 << 4,
+    OPTION_DISALLOW_AMBIGUOUS_JSX_LIKE = 1 << 5,
+    OPTION_SCOPE_ANALYSIS              = 1 << 6,
 });
 
 #[unsafe(no_mangle)]
@@ -127,36 +130,37 @@ unsafe extern "C" fn ts_compile(
     input_len: usize,
     filename: *const c_char,
     filename_len: usize,
+    options: Options,
     module_or_error: *mut *const c_char,
     module_or_error_len: *mut usize,
 ) -> CompileStatus {
     unsafe {
         let Some(module_or_error) = ptr_to_ref_mut(module_or_error) else {
-            return INVALID_POINTER;
+            return STATUS_INVALID_POINTER;
         };
 
         let Some(module_or_error_len) = ptr_to_ref_mut(module_or_error_len) else {
-            return INVALID_POINTER;
+            return STATUS_INVALID_POINTER;
         };
 
         let Some(input) = cstr_to_str(input, input_len) else {
-            return INVALID_POINTER;
+            return STATUS_INVALID_POINTER;
         };
 
         let Some(filename) = cstr_to_str(filename, filename_len) else {
-            return INVALID_POINTER;
+            return STATUS_INVALID_POINTER;
         };
 
-        let (message, success) = compile_typescript(input, filename)
+        let (message, success) = compile_typescript(input, filename, options)
             .map(|ok| (ok, true))
             .unwrap_or_else(|err| (err, false));
 
         *module_or_error = disown_str_to_cstr(&message, module_or_error_len);
 
         if success {
-            return OK;
+            return STATUS_OK;
         } else {
-            return TYPESCRIPT_COMPILE_ERROR;
+            return STATUS_COMPILE_ERROR;
         }
     }
 }
@@ -168,7 +172,11 @@ unsafe extern "C" fn ts_compile_free(str: *const c_char, size: usize) {
     }
 }
 
-fn compile_typescript(input: &str, filename: &str) -> Result<String, String> {
+fn check_flags(flags: u8, flag: u8) -> bool {
+    return (flags & flag) == flag;
+}
+
+fn compile_typescript(input: &str, filename: &str, options: Options) -> Result<String, String> {
     let specifier_res = ModuleSpecifier::parse(&format!("file://{}", filename));
 
     let Ok(specifier) = specifier_res else {
@@ -180,15 +188,15 @@ fn compile_typescript(input: &str, filename: &str) -> Result<String, String> {
         specifier,
         media_type: MediaType::TypeScript,
         text: input.into(),
-        capture_tokens: true,
+        capture_tokens: check_flags(options, OPTION_CAPTURE_TOKENS),
         maybe_syntax: Some(deno_ast::swc::parser::Syntax::Typescript(TsSyntax {
-            tsx: false,
-            decorators: true,
-            dts: false,
-            no_early_errors: true,
-            disallow_ambiguous_jsx_like: true,
+            tsx: check_flags(options, OPTION_TSX),
+            decorators: check_flags(options, OPTION_DECORATORS),
+            dts: check_flags(options, OPTION_DTS),
+            no_early_errors: check_flags(options, OPTION_NO_EARLY_ERRORS),
+            disallow_ambiguous_jsx_like: check_flags(options, OPTION_DISALLOW_AMBIGUOUS_JSX_LIKE),
         })),
-        scope_analysis: false,
+        scope_analysis: check_flags(options, OPTION_SCOPE_ANALYSIS),
     });
 
     let Ok(parsed_source) = parsed_source_res else {
